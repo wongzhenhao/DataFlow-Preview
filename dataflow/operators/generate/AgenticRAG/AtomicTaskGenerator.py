@@ -40,122 +40,146 @@ class AtomicTaskGenerator(OperatorABC):
         if conflict:
             raise ValueError(f"The following column(s) already exist and would be overwritten: {conflict}")
 
-    def _reformat_prompt(self, dataframe, prompt_type:str = None):
+    def _reformat_prompt(self, dataframe, prompt_type: str = None):
         """
-        Reformat the prompts in the dataframe to generate questions.
+        Reformat the prompts in the dataframe to generate LLM input.
+        All input columns are expected to be strings.
         """
-        if prompt_type == "get_conclusion":
+        if prompt_type == "get_identifier":
             input_prompts = dataframe[self.input_key].tolist()
-            system_prompts = self.prompts.initial_conclusion_system_prompt()
-            prompts = [self.prompts.initial_conclusion_prompt(input_prompts) for input_prompts in input_prompts]
+            system_prompt = self.prompts.get_identifier_system_prompt()
+            prompts = [self.prompts.get_identifier_prompt(p) for p in input_prompts]
+
+        elif prompt_type == "get_conclusion":
+            input_prompts = dataframe[self.input_key].tolist()
+            system_prompt = self.prompts.initial_conclusion_system_prompt()
+            prompts = [self.prompts.initial_conclusion_prompt(p) for p in input_prompts]
+
         elif prompt_type == "init_question":
-            input_prompts = dataframe["candidate_tasks"].tolist()
-            system_prompts = self.prompts.initial_question_system_prompt()
-            prompts = [
-                self.prompts.initial_question_prompt(item['conclusion'], item['R']) 
-                for item in input_prompts
-            ]
+            candidate_strs = dataframe["candidate_tasks_str"].tolist()
+            system_prompt = self.prompts.initial_question_system_prompt()
+            prompts = []
+
+            for s in candidate_strs:
+                try:
+                    item = json.loads(s)
+                    prompts.append(self.prompts.initial_question_prompt(item['conclusion'], item['R']))
+                except Exception as e:
+                    print(f"[WARN] Failed to parse candidate_tasks_str: {e} | value: {s}")
+                    prompts.append("")  # fallback to empty string or you can `continue`
+
         elif prompt_type == "clean_qa":
-            input_prompts = dataframe["generated_qa"].tolist()
-            system_prompts= self.prompts.clean_qa_system_prompt()
+            questions = dataframe["question"].tolist()
+            answers = dataframe["original_answer"].tolist()
+            system_prompt = self.prompts.clean_qa_system_prompt()
             prompts = [
-                self.prompts.clean_qa_prompt(item) 
-                for item in input_prompts
+                self.prompts.clean_qa_prompt({"question": q, "original_answer": a})
+                for q, a in zip(questions, answers)
             ]
 
-        return system_prompts, prompts
+        else:
+            raise ValueError(f"Unknown prompt_type: {prompt_type}")
+
+        return system_prompt, prompts
+
     
     def _clean_json_block(self, item: str) -> str:
         return item.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
 
     def run(
-            self,
-            storage: DataFlowStorage,
-            input_key:str = "prompts",
-            output_key:str = "generated_task"
-            ):
-        '''
-        
-        '''
+        self,
+        storage: DataFlowStorage,
+        input_key: str = "prompts",
+        output_key: str = "generated_task"
+    ):
         self.input_key, self.output_key = input_key, output_key
         dataframe = storage.read("dataframe")
         self._validate_dataframe(dataframe)
 
-        # step1: get conclusions
-        formatted_system_prompts, formatted_prompts = self._reformat_prompt(dataframe, "get_conclusion")
-        conclusion = self.llm_serving.generate_from_input(formatted_prompts, formatted_system_prompts)
+        # === Step 0: Get identifier
+        sys_prompts, user_prompts = self._reformat_prompt(dataframe, "get_identifier")
+        identifiers = self.llm_serving.generate_from_input(user_prompts, sys_prompts)
 
+        # === Step 1: Get conclusions
+        sys_prompts, user_prompts = self._reformat_prompt(dataframe, "get_conclusion")
+        conclusions = self.llm_serving.generate_from_input(user_prompts, sys_prompts)
 
-        candidate_tasks = []
-
-        for idx, (row, output_str) in enumerate(zip(dataframe.itertuples(index=False), conclusion)):
+        # === Expand each conclusion into multiple candidate tasks (rows)
+        expanded_rows = []
+        for idx, (row, output_str, identifier) in enumerate(zip(dataframe.itertuples(index=False), conclusions, identifiers)):
             try:
                 parsed = json.loads(self._clean_json_block(output_str))
             except Exception as e:
-                print(f"[WARN] JSON parse failed: {e} | output: {output_str}")
-                parsed = []
+                print(f"[WARN] JSON parse failed at idx={idx}: {e} | output: {output_str}")
+                continue
 
             if not isinstance(parsed, list):
-                parsed = []
-
-            if len(parsed) == 0:
                 continue
-            else:
-                for item in parsed:
-                    if isinstance(item, dict) and "conclusion" in item and "R" in item:
-                        new_row = row._asdict()
-                        new_row["candidate_tasks"] = item  # 只添加一条任务
-                        candidate_tasks.append(new_row)
-        
-        dataframe = pd.DataFrame(candidate_tasks)
-        
-        # step2: get atomic task question based on conclusions
-        formatted_system_prompts, formatted_prompts = self._reformat_prompt(dataframe, "init_question")
-        parsed_results  = self.llm_serving.generate_from_input(formatted_prompts, formatted_system_prompts)
-        input_qas = []
-        valid_indices = []
 
-        for idx, (parsed_str, row) in enumerate(zip(parsed_results, dataframe.itertuples(index=False))):
+            for item in parsed:
+                if isinstance(item, dict) and "conclusion" in item and "R" in item:
+                    expanded_rows.append({
+                        **row._asdict(),
+                        "identifier": str(identifier),
+                        "candidate_tasks_str": json.dumps(item, ensure_ascii=False)
+                    })
+
+        if not expanded_rows:
+            self.logger.warning("No valid candidate tasks extracted.")
+            return
+
+        dataframe = pd.DataFrame(expanded_rows)
+
+        # === Step 2: Generate questions based on conclusion+reasoning
+        sys_prompts, user_prompts = self._reformat_prompt(dataframe, "init_question")
+        question_outputs = self.llm_serving.generate_from_input(user_prompts, sys_prompts)
+
+        questions = []
+        answers = []
+        valid_rows = []
+
+        for idx, (res, row) in enumerate(zip(question_outputs, dataframe.itertuples(index=False))):
             try:
-                parsed = json.loads(parsed_str)
+                parsed = json.loads(res)
             except Exception as e:
-                print(f"[WARN] Failed to parse JSON at index {idx}: {e} | value: {parsed_str}")
-                input_qas.append(None)
+                print(f"[WARN] Failed to parse question JSON at idx={idx}: {e} | res: {res}")
                 continue
-            
-            if not isinstance(parsed, dict) or "Q" not in parsed:
-                input_qas.append(None)
-                continue
-            
-            question = parsed["Q"]
-            conclusion = row.candidate_tasks["conclusion"]
 
-            input_qas.append({
-                "question": question,
-                "original_answer": conclusion,
-            })
-            valid_indices.append(idx)
-        
-        dataframe = dataframe.iloc[valid_indices].copy()
-        dataframe["generated_qa"] = input_qas
+            if isinstance(parsed, dict) and "Q" in parsed:
+                question = parsed["Q"]
+                try:
+                    task = json.loads(row.candidate_tasks_str)
+                    answer = task.get("conclusion", "")
+                except Exception:
+                    answer = ""
+                valid_rows.append(row._asdict())
+                questions.append(str(question))
+                answers.append(str(answer))
 
-        # step3: clean_qa
-        formatted_system_prompts, formatted_prompts = self._reformat_prompt(dataframe, "clean_qa")
-        cleaned_qa  = self.llm_serving.generate_from_input(formatted_prompts, formatted_system_prompts)
-        new_data = []
-        for res in cleaned_qa:
+        if not valid_rows:
+            self.logger.warning("No valid QA pairs generated.")
+            return
+
+        dataframe = pd.DataFrame(valid_rows)
+        dataframe["question"] = questions
+        dataframe["original_answer"] = answers
+
+        # === Step 3: Clean QA
+        sys_prompts, user_prompts = self._reformat_prompt(dataframe, "clean_qa")
+        clean_outputs = self.llm_serving.generate_from_input(user_prompts, sys_prompts)
+
+        final_answers = []
+
+        for idx, res in enumerate(clean_outputs):
             try:
-                res_dict = json.loads(res)
+                parsed = json.loads(res)
+                final_answers.append(str(parsed.get("refined_answer", "")))
             except Exception as e:
-                self.logger.warning(f"[WARN] Failed to parse cleaned_qa item: {e} | item: {res}")
-                res_dict = {}
+                print(f"[WARN] Failed to parse cleaned QA at idx={idx}: {e} | res: {res}")
+                final_answers.append("")
 
-            new_data.append({
-                "question": res_dict.get("question", None),
-                "answer": res_dict.get("refined_answer", None),
-                "identifier": "text"
-            })
-        dataframe["clean_qa"] = new_data
+        dataframe["final_answer"] = final_answers
+
         
         # step4: filter qa
         # formatted_system_prompts, formatted_prompts = self._reformat_prompt(dataframe, "clean_qa")
