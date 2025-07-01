@@ -2,10 +2,12 @@ from .AutoPromptGenerator import AutoPromptGenerator
 from .QAScorer import QAScorer
 from .QAGenerator import QAGenerator
 from .AtomicTaskGenerator import AtomicTaskGenerator
+from .DepthQAGenerator import DepthQAGenerator
 
 __all__ = [
     "AutoPromptGenerator",
     "QAScorer",
     "QAGenerator",
-    "AtomicTaskGenerator"
+    "AtomicTaskGenerator",
+    "DepthQAGenerator"
 ]

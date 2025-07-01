@@ -119,6 +119,35 @@ class AtomicTaskGeneratorPrompt:
     def __init__(self):
         pass
     
+    def get_identifier_system_prompt(self) -> str:
+        system_prompt = '''
+        You need to extract the content_identifier from question. Here's how:
+  1. For each question, identify the main subject/noun phrase that the question is about
+  2. This should typically be:
+    - Proper nouns (names, titles)
+    - Specific technical terms
+    - Unique identifiers in the question
+
+  Examples:
+  {
+      "question": "What is the third movie in the Avatar series?",
+      "content_identifier": "Avatar series"
+  },
+  {
+      "question": "龙美术馆2025年展览展览时间范围是什么",
+      "content_identifier": "龙美术馆"
+  }
+
+  Return JSON format with key "content_identifier"        
+'''
+        return system_prompt
+    
+    def get_identifier_prompt(self, input) -> str:
+        prompt = f'''
+        Now process this question:{input}
+        '''
+        return prompt
+    
     def initial_conclusion_system_prompt(self) -> str:
         system_prompt = '''
         |
@@ -356,4 +385,171 @@ class AtomicTaskGeneratorPrompt:
             The data need to be processed is as follows: {input_qa}
         '''
 
+        return prompt
+    
+class DepthQAGeneratorPrompt:
+    '''
+    The prompt for the AtomicTaskGenerator.
+    '''
+    def __init__(self):
+        pass
+    
+    def get_identifier_system_prompt(self) -> str:
+        system_prompt = '''
+        You need to extract the content_identifier from question. Here's how:
+  1. For each question, identify the main subject/noun phrase that the question is about
+  2. This should typically be:
+    - Proper nouns (names, titles)
+    - Specific technical terms
+    - Unique identifiers in the question
+
+  Examples:
+  {
+      "question": "What is the third movie in the Avatar series?",
+      "content_identifier": "Avatar series"
+  },
+  {
+      "question": "龙美术馆2025年展览展览时间范围是什么",
+      "content_identifier": "龙美术馆"
+  }
+
+  Return JSON format with key "content_identifier"        
+'''
+        return system_prompt
+    
+    def get_identifier_prompt(self, input) -> str:
+        prompt = f'''
+        Now process this question:{input}
+        '''
+        return prompt
+    
+    def get_backward_task_prompt(self, input) -> str:
+        prompt = f'''
+        Conduct divergent searches based on the input element to find an appropriate superset related to its attributes, and elaborate on the relationship between the superset and the element (mine for special and uniquely pointing relationships to ensure that the superset + relationship does not mislead to other subsets). Example supersets include:
+  1. The superset of a paragraph or sentence can be the text content it belongs to.
+  2. The superset of a specific term can be its corresponding discipline or category.
+  3. The superset of a specific date can be any date range containing it, such as the week or month it belongs to.
+  4. The superset of a short event can be the complete specific event it belongs to.
+  5. The superset of a page can be other pages referencing it or its parent page.
+  6. Only generate one relationship, and the content of the relationship should preferably not include strongly specific proper nouns.
+  
+  Optional expressions for relationships:
+  1. Clearly express hierarchical or ownership relationships. If the input is a sub-item of a series of works, the relation should indicate its position; if the input is a part of a superset, the relation should clarify its ownership.
+  2. Provide the specific positioning of the input content, such as time range, field of paper publication, or specific role in the superset.
+  3. Wording should conform to the research field or industry standards of the input content.
+  4. Only provide necessary association information to avoid irrelevant content. Good example: "This study is part of the IRAM NOEMA Large Program research collection". Bad example: "This study is a very important research conducted by many scientists and has produced very meaningful results" (verbose and containing subjective evaluations).
+  
+  Note:
+  1. Please return the identifier of the superset content, such as attribute name, web page title, paper title, etc., which uniquely locates the superset content.
+  2. The content of the superset needs to be obtained through tool invocation, which can be specific web content, PDF text, or image understanding content.
+  3. Please clearly describe the relationship between the superset content and the input element, that is, list the qualification conditions from the superset content to ensure that the conditions uniquely point to the input element, and the description of the conditions should be concise.
+  4. Use a maximum of 3 search keywords per search; if more than 3 keywords are needed, perform multiple searches separately.
+  5. The obtained identifier should preferably be derived from search results and not include the input content.
+  6. If the input is a PDF document, give priority to invoking tools to read the document content.
+  
+  Return format requirements: Please return the result in JSON format with keys 'identifier': str (identifier) and 'relation': str (relationship).
+  
+  Here are some reference input-output examples: 
+  Example1:
+  Input: Avatar 3: Fire and Ash
+  identifier: Avatar film series
+  relation: The third film
+  
+  Example2:
+  Input: The 15 social media trends that will shape your 2025 strategy
+  identifier: Hootsuite blog end of 2024
+  relation: The authoritative trends report published by Hootsuite to guide social media strategy development
+
+  Example3:
+  Input: SOLIS (Seeds of Life In Space) project
+  identifier: NOEMA Large Program
+  relation: A sub-project within NOEMA's specific large observation program related to research on the existence of life in the universe.
+  
+  Example4:
+  Input: SOLIS. XIX. The chemically rich SVS13-B protostellar jet
+  identifier: IRAM NOEMA Large Program research collection
+  relation: One of the imaged enriched molecular jet samples in the IRAM NOEMA Large Program research collection, specifically imaged and analyzed for molecular distribution and composition within the collection, uniquely locatable via observation data on SVS13-B in the collection.
+  
+  Example5:
+  Input: AdCare -VLM: Leveraging Large Vision Language Model (LVLM) to Monitor Long-Term Medication Adherence and Care
+  identifier: A Survey of State of the Art Large Vision Language Models: Alignment, Benchmark, Evaluations and Challenges
+  relation: A paper that introduces advancements in large vision language models in A Survey of State of the Art Large Vision Language Models: Alignment, Benchmark, Evaluations and Challenges, covering models including the LVLM described in the input paper.
+  
+  Example6:
+  Input: Immigration is a higher priority for Americans in 2025: AP-NORC poll | AP News
+  identifier: 2025 policy priorities report for AAPI communities
+  relation: The poll results about shifting immigration priorities featured in AP News and referenced in AAPI policy reports
+
+  Example7:
+  Input: X-ray Absorption Spectroscopy (XAS) database for iron-containing proteins (arXiv:2504.18554)
+  identifier: iron-binding proteins database
+  relation: The specialized database that collects XAS data specifically for proteins containing iron
+
+  Example8: 
+  Input: live-action 'Snow White' movie controversy
+  identifier: Disney animated film adaptation
+  relation: The controversial live-action movie adapted from a Disney animated film featuring the main character Snow White
+  
+  Example9:
+  Input: Evaluating the evidence: a systematic review of reviews of the effectiveness and safety of digital interventions for ADHD | BMC Psychiatry | Full Text
+  identifier: BMC Psychiatry journal 2025 publications
+  relation: The full-text systematic review about digital ADHD interventions published in BMC Psychiatry
+  
+  Example10:
+  Input: Enron Corporation
+  identifier: 2001 Fortune Global 500 energy industry rankings
+  relation: The company that ranked first in revenue in the energy sector according to the 2001 Fortune Global 500 rankings
+  
+  Current input: 
+  {input}
+        '''
+        return prompt
+    
+    def check_superset_system_prompt(self) -> str:
+        system_prompt = '''
+**Task**: Validate if a given "superset" can uniquely identify a "subset" based on the provided "relationship".  
+  
+  **Rules**:  
+  1. **Superset-Subset Relationship**:  
+    - The "superset" must be a true generalization of the "subset" (e.g., "Animal" is a valid superset of "Dog").  
+    - The "superset" CANNOT be a synonym of the "subset" (e.g., "Car" and "Automobile" are invalid).  
+  
+  2. **Relationship Validity**:  
+    - The relationship must **explicitly and uniquely** link the superset to the subset.    
+    - It CANNOT be a **many-to-one mapping**.  
+  
+  **Output Format**:  
+  Return a JSON with the key `new_query`. The value should be:  
+  - `"valid"` if the superset and relationship can uniquely locate the subset.  
+  - `"invalid"` otherwise.  
+  
+  **Example Valid Output**:  
+  {"new_query": "valid"}
+'''
+        return system_prompt
+    
+    def check_superset_prompt(self, new_id, relation, identifier) -> str:
+        prompt = f'''
+Given superset: {new_id}\n
+Given relationship: {relation}\n
+Given subset: {identifier}\n
+'''
+        return prompt
+    
+    def get_question_system_prompt(self) -> str:
+        system_prompt = '''
+  Please generate a question based on the content of the input identifier, a certain answer, and a certain relationship (this relationship is the relationship between the content of the file corresponding to the identifier and the given answer), such that
+  The answer to this question is the input answer.
+  The content of this question is determined by the content of the identifier and the content of the given relationship.
+  The generated question should not involve the content of the input answer.
+  Please return it in JSON format, with the key of the JSON being new_query.
+'''
+        return system_prompt
+    
+    def get_question_prompt(self, new_id, relation, identifier) -> str:
+        prompt = f'''
+                Certain answer: {identifier}\n
+                Identifier: {new_id}\n
+                Relationship: {relation}\n
+'''
         return prompt
