@@ -30,7 +30,7 @@ class AtomicTaskGenerator(OperatorABC):
     
     def _validate_dataframe(self, dataframe: pd.DataFrame):
         required_keys = [self.input_key]
-        forbidden_keys = [self.output_key]
+        forbidden_keys = [self.output_refined_answer_key, self.output_answer_key, self.output_question_key]
 
         missing = [k for k in required_keys if k not in dataframe.columns]
         conflict = [k for k in forbidden_keys if k in dataframe.columns]
@@ -69,14 +69,26 @@ class AtomicTaskGenerator(OperatorABC):
                     prompts.append("")  # fallback to empty string or you can `continue`
 
         elif prompt_type == "clean_qa":
-            questions = dataframe["question"].tolist()
-            answers = dataframe["original_answer"].tolist()
+            questions = dataframe[self.output_question_key].tolist()
+            answers = dataframe[self.output_answer_key].tolist()
             system_prompt = self.prompts.clean_qa_system_prompt()
             prompts = [
                 self.prompts.clean_qa_prompt({"question": q, "original_answer": a})
                 for q, a in zip(questions, answers)
             ]
-
+        elif prompt_type == "llm_answer":
+            questions = dataframe[self.output_question_key].tolist()
+            system_prompt = ""
+            prompts = [
+                self.prompts.llm_answer_prompt(question) for question in questions
+            ]
+        elif prompt_type == "get_recall_score":
+            golden_answers = dataframe[self.output_refined_answer_key].tolist()
+            llm_answers = dataframe["llm_answer"]
+            system_prompt = self.prompts.recall_system_prompt()
+            prompts = [
+                self.prompts.recall_prompt(golden_answer, llm_answer) for golden_answer, llm_answer in zip(golden_answers, llm_answers)
+            ]
         else:
             raise ValueError(f"Unknown prompt_type: {prompt_type}")
 
@@ -86,13 +98,31 @@ class AtomicTaskGenerator(OperatorABC):
     def _clean_json_block(self, item: str) -> str:
         return item.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
 
+    def recall_score(self, dataframe):
+        sys_prompts, user_prompts = self._reformat_prompt(dataframe, "get_recall_score")
+        recall_scores = self.llm_serving.generate_from_input(user_prompts, sys_prompts)
+        valid_scores = []
+        for score_str in recall_scores:
+            if score_str is not None:
+                try:
+                    score_dict = json.loads(score_str)
+                    valid_scores.append(score_dict["answer_score"])
+                except (json.JSONDecodeError, KeyError):
+                    print(score_str)
+                    valid_scores.append(0)
+                    continue
+        return valid_scores
+        
     def run(
         self,
         storage: DataFlowStorage,
         input_key: str = "prompts",
-        output_key: str = "generated_task"
+        output_question_key: str = "question",
+        output_answer_key:str = "answer",
+        output_refined_answer_key:str = "refined_answer"
     ):
-        self.input_key, self.output_key = input_key, output_key
+        self.input_key, self.output_question_key = input_key, output_question_key
+        self.output_answer_key, self.output_refined_answer_key = output_answer_key, output_refined_answer_key
         dataframe = storage.read("dataframe")
         self._validate_dataframe(dataframe)
 
@@ -161,8 +191,8 @@ class AtomicTaskGenerator(OperatorABC):
             return
 
         dataframe = pd.DataFrame(valid_rows)
-        dataframe["question"] = questions
-        dataframe["original_answer"] = answers
+        dataframe[self.output_question_key] = questions
+        dataframe[self.output_answer_key] = answers
 
         # === Step 3: Clean QA
         sys_prompts, user_prompts = self._reformat_prompt(dataframe, "clean_qa")
@@ -178,14 +208,17 @@ class AtomicTaskGenerator(OperatorABC):
                 print(f"[WARN] Failed to parse cleaned QA at idx={idx}: {e} | res: {res}")
                 final_answers.append("")
 
-        dataframe["final_answer"] = final_answers
+        dataframe[self.output_refined_answer_key] = final_answers
 
-        
-        # step4: filter qa
-        # formatted_system_prompts, formatted_prompts = self._reformat_prompt(dataframe, "clean_qa")
-        # cleaned_qa  = self.llm_serving.generate_from_input(formatted_prompts, formatted_system_prompts)
+        # Verify module
+        sys_prompts, user_prompts = self._reformat_prompt(dataframe, "llm_answer")
+        llm_answer_results = self.llm_serving.generate_from_input(user_prompts, sys_prompts)
 
-        # TODO: Search and Verify module
+        dataframe["llm_answer"] = llm_answer_results
+        llm_score = self.recall_score(dataframe)
+        dataframe["llm_score"] = llm_score
+        dataframe = dataframe[dataframe["llm_score"] < 1].drop(columns=["llm_score"]).reset_index(drop=True)
+        dataframe = dataframe.drop(columns="llm_answer")
 
         output_file = storage.write(dataframe)
         self.logger.info(f"Results saved to {output_file}")
