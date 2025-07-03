@@ -222,4 +222,4 @@ class AtomicTaskGenerator(OperatorABC):
 
         output_file = storage.write(dataframe)
         self.logger.info(f"Results saved to {output_file}")
-        return
+        return "identifier", "candidate_tasks_str", self.output_question_key, self.output_answer_key, self.output_refined_answer_key
