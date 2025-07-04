@@ -382,11 +382,65 @@ class AtomicTaskGeneratorPrompt:
   '''
         return system_prompt
     
-    def clean_qa_prompt(self, input_qa) -> str:
+    def clean_qa_prompt(self, input) -> str:
         prompt = f'''
-            The data need to be processed is as follows: {input_qa}
+            The data need to be processed is as follows: {input}
         '''
 
+        return prompt
+
+    def llm_answer_prompt(self, input) -> str:
+        prompt = f'''
+Please solve the following problem and return as many relevant results as possible that "
+"meet the query requirements. Ensure responses are as concise as possible, focusing only "
+"on key information while omitting redundant details."
+"Please return the result in JSON format with keys 'answer_list': List[str] the list of answers."
+"\n\n"
+"The task is: \n
+{input}
+        '''.strip()
+        
+        return prompt
+    
+    def recall_system_prompt(self) -> str:
+        system_prompt = '''
+Evaluate the consistency of the core content of the golden answer and the other answer
+  # Scoring Criteria 
+    1) 2 points: the information between the golden answer and the other answer completely consistent, although the expression methods can be different. 
+    2) 1 point: the other answer contains all the information of the golden answer but has additional valid information.
+    3) 0 point: the other answer lacks the necessary key information of the golden answer, or there are contradictions in both the information.
+  
+  # Examples:
+    1) Examples for 2 points: 
+        1.1) two answers are completely consistent:
+            - Golden answer: Interest rates should be raised and inflation should be monitored.
+            - Other answer: It is necessary to raise interest rates and monitor inflation.
+    2) Examples for 1 point: 
+        2.1) the other answer contains all the information of the golden answer and adds extra useful information:
+        - Golden answer: The interest rates should be raised.
+        - Other answer: The interest rates should be raised and inflation should be monitored.
+    3) Examples for 0 point: 
+        3.1) the other answer lacks the key information of the golden answer:
+        - Golden answer: The interest rates should be raised and inflation should be monitored.
+        - Other answer: The interest rates should be raised.
+        3.2) the other answer has contradictions:
+        - Golden answer: Interest rates should be raised by 50 basis points.
+        - Other answer: Interest rates should be raised by 25 basis points.
+  
+  # the output should be in JSON format as required without any irrelevant content
+  {
+    "answer_analysis":"give out the reason on how to score the llm_answer",
+    "answer_score":0/1/2
+  }
+'''
+        return system_prompt
+    
+    def recall_prompt(self, golden_answer, llm_answer) -> str:
+        prompt = f'''
+    The inputs are as follows:
+    Golden Answer: {golden_answer}
+    Other Answer: {llm_answer}
+        '''
         return prompt
     
 class DepthQAGeneratorPrompt:
@@ -556,6 +610,60 @@ Given subset: {identifier}\n
 '''
         return prompt
     
+    def llm_answer_prompt(self, input) -> str:
+        prompt = f'''
+Please solve the following problem and return as many relevant results as possible that "
+"meet the query requirements. Ensure responses are as concise as possible, focusing only "
+"on key information while omitting redundant details."
+"Please return the result in JSON format with keys 'answer_list': List[str] the list of answers."
+"\n\n"
+"The task is: \n
+{input}
+        '''.strip()
+        
+        return prompt
+
+    def recall_system_prompt(self) -> str:
+        system_prompt = '''
+Evaluate the consistency of the core content of the golden answer and the other answer
+  # Scoring Criteria 
+    1) 2 points: the information between the golden answer and the other answer completely consistent, although the expression methods can be different. 
+    2) 1 point: the other answer contains all the information of the golden answer but has additional valid information.
+    3) 0 point: the other answer lacks the necessary key information of the golden answer, or there are contradictions in both the information.
+  
+  # Examples:
+    1) Examples for 2 points: 
+        1.1) two answers are completely consistent:
+            - Golden answer: Interest rates should be raised and inflation should be monitored.
+            - Other answer: It is necessary to raise interest rates and monitor inflation.
+    2) Examples for 1 point: 
+        2.1) the other answer contains all the information of the golden answer and adds extra useful information:
+        - Golden answer: The interest rates should be raised.
+        - Other answer: The interest rates should be raised and inflation should be monitored.
+    3) Examples for 0 point: 
+        3.1) the other answer lacks the key information of the golden answer:
+        - Golden answer: The interest rates should be raised and inflation should be monitored.
+        - Other answer: The interest rates should be raised.
+        3.2) the other answer has contradictions:
+        - Golden answer: Interest rates should be raised by 50 basis points.
+        - Other answer: Interest rates should be raised by 25 basis points.
+  
+  # the output should be in JSON format as required without any irrelevant content
+  {
+    "answer_analysis":"give out the reason on how to score the llm_answer",
+    "answer_score":0/1/2
+  }
+'''
+        return system_prompt
+    
+    def recall_prompt(self, golden_answer, llm_answer) -> str:
+        prompt = f'''
+    The inputs are as follows:
+    Golden Answer: {golden_answer}
+    Other Answer: {llm_answer}
+        '''
+        return prompt
+    
 class WidthQAGeneratorPrompt:
     '''
     The prompt for the AtomicTaskGenerator.
@@ -691,4 +799,58 @@ class WidthQAGeneratorPrompt:
     Please answer these research questions:
     {json.dumps(input, indent=2, ensure_ascii=False)}
 '''
+        return prompt
+    
+    def llm_answer_prompt(self, input) -> str:
+        prompt = f'''
+Please solve the following problem and return as many relevant results as possible that "
+"meet the query requirements. Ensure responses are as concise as possible, focusing only "
+"on key information while omitting redundant details."
+"Please return the result in JSON format with keys 'answer_list': List[str] the list of answers."
+"\n\n"
+"The task is: \n
+{input}
+        '''.strip()
+        
+        return prompt
+
+    def recall_system_prompt(self) -> str:
+        system_prompt = '''
+Evaluate the consistency of the core content of the golden answer and the other answer
+  # Scoring Criteria 
+    1) 2 points: the information between the golden answer and the other answer completely consistent, although the expression methods can be different. 
+    2) 1 point: the other answer contains all the information of the golden answer but has additional valid information.
+    3) 0 point: the other answer lacks the necessary key information of the golden answer, or there are contradictions in both the information.
+  
+  # Examples:
+    1) Examples for 2 points: 
+        1.1) two answers are completely consistent:
+            - Golden answer: Interest rates should be raised and inflation should be monitored.
+            - Other answer: It is necessary to raise interest rates and monitor inflation.
+    2) Examples for 1 point: 
+        2.1) the other answer contains all the information of the golden answer and adds extra useful information:
+        - Golden answer: The interest rates should be raised.
+        - Other answer: The interest rates should be raised and inflation should be monitored.
+    3) Examples for 0 point: 
+        3.1) the other answer lacks the key information of the golden answer:
+        - Golden answer: The interest rates should be raised and inflation should be monitored.
+        - Other answer: The interest rates should be raised.
+        3.2) the other answer has contradictions:
+        - Golden answer: Interest rates should be raised by 50 basis points.
+        - Other answer: Interest rates should be raised by 25 basis points.
+  
+  # the output should be in JSON format as required without any irrelevant content
+  {
+    "answer_analysis":"give out the reason on how to score the llm_answer",
+    "answer_score":0/1/2
+  }
+'''
+        return system_prompt
+    
+    def recall_prompt(self, golden_answer, llm_answer) -> str:
+        prompt = f'''
+    The inputs are as follows:
+    Golden Answer: {golden_answer}
+    Other Answer: {llm_answer}
+        '''
         return prompt

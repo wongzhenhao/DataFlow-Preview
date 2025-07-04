@@ -30,7 +30,7 @@ class WidthQAGenerator(OperatorABC):
     
     def _validate_dataframe(self, dataframe: pd.DataFrame):
         required_keys = [self.input_question_key, self.input_answer_key, self.input_identifier_key]
-        forbidden_keys = [self.output_key]
+        forbidden_keys = [self.output_question_key, "content_identifier", "qa_index", "index", "original_answer", "original_question", "state"]
 
         missing = [k for k in required_keys if k not in dataframe.columns]
         conflict = [k for k in forbidden_keys if k in dataframe.columns]
@@ -63,18 +63,41 @@ class WidthQAGenerator(OperatorABC):
             return system_prompts, prompts
         elif prompt_type == "question_verify":
             input_batch = []
-            for idx, q in zip(dataframe["index"], dataframe["complex_question"]):
+            for idx, q in zip(dataframe["index"], dataframe[self.output_question_key]):
                 input_batch.append({
                     "index": idx,
                     "complex_question": q,
                 })
             system_prompts = self.prompts.question_verify_system_prompt()
             prompts = [self.prompts.question_verify_prompt(input) for input in input_batch]
-
+        elif prompt_type == "get_recall_score":
+            golden_answers = dataframe["original_answer"].tolist()
+            llm_answers = dataframe["llm_answer"]
+            system_prompts = self.prompts.recall_system_prompt()
+            prompts = [
+                self.prompts.recall_prompt(golden_answer, llm_answer) for golden_answer, llm_answer in zip(golden_answers, llm_answers)
+            ]
+        else:
+            raise ValueError(f"Unknown prompt_type: {prompt_type}")
         return system_prompts, prompts
     
     def _clean_json_block(self, item: str) -> str:
         return item.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+
+    def recall_score(self, dataframe):
+        sys_prompts, user_prompts = self._reformat_prompt(dataframe, "get_recall_score")
+        recall_scores = self.llm_serving.generate_from_input(user_prompts, sys_prompts)
+        valid_scores = []
+        for score_str in recall_scores:
+            if score_str is not None:
+                try:
+                    score_dict = json.loads(score_str)
+                    valid_scores.append(score_dict["answer_score"])
+                except (json.JSONDecodeError, KeyError):
+                    print(score_str)
+                    valid_scores.append(0)
+                    continue
+        return valid_scores
 
     def run(
             self,
@@ -82,9 +105,9 @@ class WidthQAGenerator(OperatorABC):
             input_question_key:str = "question",
             input_identifier_key:str = "identifier",
             input_answer_key:str = "answer",
-            output_key:str = "generated_depth_task"
+            output_question_key:str = "generated_width_task"
             ):
-        self.input_question_key, self.input_identifier_key, self.input_answer_key, self.output_key = input_question_key, input_identifier_key,input_answer_key, output_key
+        self.input_question_key, self.input_identifier_key, self.input_answer_key, self.output_question_key = input_question_key, input_identifier_key,input_answer_key, output_question_key
         dataframe = storage.read("dataframe")
         self._validate_dataframe(dataframe)
 
@@ -157,7 +180,7 @@ class WidthQAGenerator(OperatorABC):
                 complex_questions.append(None)
 
         dataframe["state"] = states
-        dataframe["complex_question"] = complex_questions
+        dataframe[self.output_question_key] = complex_questions
         dataframe = dataframe[dataframe["state"] == 1].copy()
 
         # Step 2: Verify if LLM can answer the complex questions
@@ -181,8 +204,11 @@ class WidthQAGenerator(OperatorABC):
                 llm_answers.append(None)
 
         dataframe["llm_answer"] = llm_answers
-        # Verify Step:
-        # TODO: Search and Verify module
+        
+        llm_score = self.recall_score(dataframe)
+        dataframe["llm_score"] = llm_score
+        dataframe = dataframe[dataframe["llm_score"] < 1].drop(columns=["llm_score"]).reset_index(drop=True)
+        dataframe = dataframe.drop(columns="llm_answer")
 
         output_file = storage.write(dataframe)
         self.logger.info(f"Results saved to {output_file}")
